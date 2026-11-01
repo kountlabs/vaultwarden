@@ -796,6 +796,9 @@ make_config! {
         /// Enable groups (BETA!) (Know the risks!) |> Enables groups support for organizations (Currently contains known issues!).
         org_groups_enabled:            bool, false, def, false;
 
+        /// Kount: auto-accept public-API members with an SSO link |> A member created through the public API for a user who already has an SSO link lands as Accepted with no invitation mail (a Kount deviation, apps/vaultwarden-kount/README.md).
+        kount_public_member_auto_accept: bool, false, def, false;
+
         /// Increase note size limit (Know the risks!) |> Sets the secure note size limit to 100_000 instead of the default 10_000.
         /// WARNING: This could cause issues with clients. Also exports will not work on Bitwarden servers!
         increase_note_size_limit:      bool,  true,  def, false;

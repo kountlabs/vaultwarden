@@ -1,0 +1,44 @@
+Kount A1 — the collection dialog's External ID is shown and editable in the admin console.
+
+At this web vault the field was read-only and shown only for a collection that already had an External ID
+(`isExternalIdVisible = isAdminConsoleActive && !!externalId`), so an admin could not type the id Kount Protect
+gives an account (plan DA, A1; docs/spike-2026-11.md E14). The admin console's two dialog openers (add and edit)
+pass `isAdminConsoleActive: true`; outside the admin console the field stays hidden. The value is trimmed on
+save (the server stores it as typed). The server already stores `externalId` on create and on update.
+
+diff --git a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
+--- a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
++++ b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
+@@ -36,7 +36,7 @@
+
+         <bit-form-field *ngIf="isExternalIdVisible">
+           <bit-label>{{ "externalId" | i18n }}</bit-label>
+-          <input bitInput formControlName="externalId" readonly />
++          <input bitInput formControlName="externalId" maxlength="300" />
+           <bit-hint>{{ "externalIdDesc" | i18n }}</bit-hint>
+         </bit-form-field>
+
+diff --git a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+--- a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
++++ b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+@@ -351,8 +351,10 @@ export class CollectionDialogComponent implements OnInit, OnDestroy {
+     return this.formGroup.controls.selectedOrg;
+   }
+
++  // Kount: the External ID is shown and editable in the admin console, so an admin can type the id
++  // Kount Protect gives an account (apps/vaultwarden-kount, plan A1). Elsewhere it stays hidden.
+   protected get isExternalIdVisible(): boolean {
+-    return this.params.isAdminConsoleActive && !!this.formGroup.get("externalId")?.value;
++    return !!this.params.isAdminConsoleActive;
+   }
+
+   protected get collectionId() {
+@@ -435,7 +437,7 @@ export class CollectionDialogComponent implements OnInit, OnDestroy {
+       : this.formGroup.controls.name.value;
+     collectionView.id = this.params.collectionId as CollectionId;
+     collectionView.organizationId = this.formGroup.controls.selectedOrg.value;
+-    collectionView.externalId = this.formGroup.controls.externalId.value;
++    collectionView.externalId = (this.formGroup.controls.externalId.value ?? "").trim();
+     collectionView.groups = this.formGroup.controls.access.value
+       .filter((v) => v.type === AccessItemType.Group)
+       .map(convertToSelectionView);

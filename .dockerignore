@@ -8,6 +8,7 @@
 !macros
 !migrations
 !src
+!web-vault
 
 !build.rs
 !Cargo.lock

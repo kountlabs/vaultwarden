@@ -1,3 +1,27 @@
+# Kount build of Vaultwarden — 1.37.4+kount.1
+
+This branch (`kount/1.37.4`) and its tag (`1.37.4+kount.1`) are the complete corresponding source of the modified
+Vaultwarden that runs at vault.kount.com.au, offered under the GNU AGPL v3 (§13). It is exactly upstream
+`dani-garcia/vaultwarden` at tag `1.37.4` (commit `7c18896`) with Kount's patch set applied:
+
+- Bitwarden's public API for organisation members, collections and policies (`src/api/core/public_*.rs`,
+  `src/api/core/public.rs`), and organisation policies 11 and 12 served (`src/db/models/org_policy.rs`);
+- the `KOUNT_PUBLIC_MEMBER_AUTO_ACCEPT` setting (`src/config.rs`);
+- the build changes that bundle Kount's web vault (`docker/Dockerfile.debian`, `.dockerignore`).
+
+The image also bundles a web vault built from Bitwarden's clients (GPL-3.0) at `v2026.7.0` (the commit
+`dani-garcia/bw_web_builds` `v2026.7.0` names) with Kount's two web-vault patches, which are committed beside the
+server source in [`kount/web/`](kount/web/): the editable collection External ID in the admin console, and the
+organisation vault's prefilled "New item" link.
+
+> The vault at vault.kount.com.au runs a modified Vaultwarden. Its complete source code is available at
+> https://github.com/kountlabs/vaultwarden — the tag matching the version shown on the vault's admin
+> Diagnostics page.
+
+Upstream's README follows unchanged.
+
+---
+
 ![Vaultwarden Logo](./resources/vaultwarden-logo-auto.svg)
 
 An alternative server implementation of the Bitwarden Client API, written in Rust and compatible with [official Bitwarden clients](https://bitwarden.com/download/) [[disclaimer](#disclaimer)], perfect for self-hosted deployment where running the official resource-heavy service might not be ideal.
