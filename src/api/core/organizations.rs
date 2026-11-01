@@ -8,7 +8,7 @@ use crate::{
     CONFIG,
     api::admin::FAKE_ADMIN_UUID,
     api::{
-        EmptyResult, JsonResult, Notify, PasswordOrOtpData, UpdateType,
+        ApiResult, EmptyResult, JsonResult, Notify, PasswordOrOtpData, UpdateType,
         core::{CipherSyncData, CipherSyncType, accept_org_invite, log_event, two_factor},
     },
     auth::{AdminHeaders, Headers, ManagerHeaders, ManagerHeadersLoose, OrgMemberHeaders, OwnerHeaders, decode_invite},
@@ -2023,7 +2023,7 @@ async fn get_policy(org_id: OrganizationId, pol_type: i32, headers: AdminHeaders
 }
 
 #[derive(Deserialize)]
-struct PolicyData {
+pub(super) struct PolicyData {
     enabled: bool,
     data: Option<Value>,
 }
@@ -2049,19 +2049,36 @@ async fn put_policy(
         err!("Organization not found", "Organization id's do not match");
     }
     let data: PolicyData = data.into_inner().policy;
+    let policy =
+        save_policy(&org_id, pol_type, data, &headers.user.uuid, headers.device.atype, &headers.ip.ip, &conn).await?;
 
+    Ok(Json(policy.to_json()))
+}
+
+/// Validate a policy change, apply its side effects (enabling the Two-step login or the Single organization policy
+/// revokes the members that do not comply) and save it. Shared by the route above and the Public API's
+/// `PUT /public/policies/<type>`.
+pub(super) async fn save_policy(
+    org_id: &OrganizationId,
+    pol_type: i32,
+    data: PolicyData,
+    act_user_id: &UserId,
+    device_type: i32,
+    ip: &std::net::IpAddr,
+    conn: &DbConn,
+) -> ApiResult<OrgPolicy> {
     let Some(pol_type_enum) = OrgPolicyType::from_i32(pol_type) else {
         err!("Invalid or unsupported policy type")
     };
 
-    let current_policy = OrgPolicy::find_by_org_and_type(&org_id, pol_type_enum, &conn).await;
+    let current_policy = OrgPolicy::find_by_org_and_type(org_id, pol_type_enum, conn).await;
     let is_currently_enabled = current_policy.as_ref().is_some_and(|policy| policy.enabled);
 
     // Fill Assist depends on Single Organization. Match Bitwarden's dependency checks by only checking when the
     // policy changes state.
     if pol_type_enum == OrgPolicyType::FillAssist && data.enabled && !is_currently_enabled {
         let single_org_policy_enabled =
-            OrgPolicy::find_by_org_and_type(&org_id, OrgPolicyType::SingleOrg, &conn).await.is_some_and(|p| p.enabled);
+            OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::SingleOrg, conn).await.is_some_and(|p| p.enabled);
 
         if !single_org_policy_enabled {
             err!("Turn on the Single organization policy because it is required for the Activate fill assist policy.")
@@ -2070,7 +2087,7 @@ async fn put_policy(
 
     if pol_type_enum == OrgPolicyType::SingleOrg && !data.enabled && is_currently_enabled {
         let fill_assist_policy_enabled =
-            OrgPolicy::find_by_org_and_type(&org_id, OrgPolicyType::FillAssist, &conn).await.is_some_and(|p| p.enabled);
+            OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::FillAssist, conn).await.is_some_and(|p| p.enabled);
 
         if fill_assist_policy_enabled {
             err!("Turn off the Activate fill assist policy because it requires the Single organization policy.")
@@ -2085,7 +2102,7 @@ async fn put_policy(
     if CONFIG.enforce_single_org_with_reset_pw_policy() {
         if pol_type_enum == OrgPolicyType::ResetPassword && data.enabled {
             let single_org_policy_enabled =
-                match OrgPolicy::find_by_org_and_type(&org_id, OrgPolicyType::SingleOrg, &conn).await {
+                match OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::SingleOrg, conn).await {
                     Some(p) => p.enabled,
                     None => false,
                 };
@@ -2098,7 +2115,7 @@ async fn put_policy(
         // Also prevent the Single Org Policy to be disabled if the Reset Password policy is enabled
         if pol_type_enum == OrgPolicyType::SingleOrg && !data.enabled {
             let reset_pw_policy_enabled =
-                match OrgPolicy::find_by_org_and_type(&org_id, OrgPolicyType::ResetPassword, &conn).await {
+                match OrgPolicy::find_by_org_and_type(org_id, OrgPolicyType::ResetPassword, conn).await {
                     Some(p) => p.enabled,
                     None => false,
                 };
@@ -2142,30 +2159,22 @@ async fn put_policy(
 
     // When enabling the TwoFactorAuthentication policy, revoke all members that do not have 2FA
     if pol_type_enum == OrgPolicyType::TwoFactorAuthentication && data.enabled {
-        two_factor::enforce_2fa_policy_for_org(
-            &org_id,
-            &headers.user.uuid,
-            headers.device.atype,
-            &headers.ip.ip,
-            &conn,
-        )
-        .await?;
+        two_factor::enforce_2fa_policy_for_org(org_id, act_user_id, device_type, ip, conn).await?;
     }
 
     // When enabling the SingleOrg policy, remove this org's members that are members of other orgs
     if pol_type_enum == OrgPolicyType::SingleOrg && data.enabled {
-        for mut member in Membership::find_by_org(&org_id, &conn).await {
+        for mut member in Membership::find_by_org(org_id, conn).await {
             // Policy only applies to non-Owner/non-Admin members who have accepted joining the org
             // Exclude invited and revoked users when checking for this policy.
             // Those users will not be allowed to accept or be activated because of the policy checks done there.
             if member.atype < MembershipType::Admin
                 && member.status != MembershipStatus::Invited as i32
-                && Membership::count_accepted_and_confirmed_by_user(&member.user_uuid, &member.org_uuid, &conn).await
-                    > 0
+                && Membership::count_accepted_and_confirmed_by_user(&member.user_uuid, &member.org_uuid, conn).await > 0
             {
                 if CONFIG.mail_enabled() {
-                    let org = Organization::find_by_uuid(&member.org_uuid, &conn).await.unwrap();
-                    let user = User::find_by_uuid(&member.user_uuid, &conn).await.unwrap();
+                    let org = Organization::find_by_uuid(&member.org_uuid, conn).await.unwrap();
+                    let user = User::find_by_uuid(&member.user_uuid, conn).await.unwrap();
 
                     mail::send_single_org_removed_from_org(&user.email, &org.name).await?;
                 }
@@ -2173,16 +2182,16 @@ async fn put_policy(
                 log_event(
                     EventType::OrganizationUserRevokedSingleOrganizationNonCompliance,
                     &member.uuid,
-                    &org_id,
-                    &headers.user.uuid,
-                    headers.device.atype,
-                    &headers.ip.ip,
-                    &conn,
+                    org_id,
+                    act_user_id,
+                    device_type,
+                    ip,
+                    conn,
                 )
                 .await;
 
                 member.revoke();
-                member.save(&conn).await?;
+                member.save(conn).await?;
             }
         }
     }
@@ -2194,20 +2203,11 @@ async fn put_policy(
 
     policy.enabled = data.enabled;
     policy.data = serde_json::to_string(&data.data)?;
-    policy.save(&conn).await?;
+    policy.save(conn).await?;
 
-    log_event(
-        EventType::PolicyUpdated,
-        policy.uuid.as_ref(),
-        &org_id,
-        &headers.user.uuid,
-        headers.device.atype,
-        &headers.ip.ip,
-        &conn,
-    )
-    .await;
+    log_event(EventType::PolicyUpdated, policy.uuid.as_ref(), org_id, act_user_id, device_type, ip, conn).await;
 
-    Ok(Json(policy.to_json()))
+    Ok(policy)
 }
 
 #[get("/plans")]

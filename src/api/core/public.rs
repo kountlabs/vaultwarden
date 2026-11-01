@@ -9,20 +9,41 @@ use rocket::{
 
 use crate::{
     CONFIG,
-    api::EmptyResult,
-    auth,
+    api::{EmptyResult, core::log_event},
+    auth::{self, ClientIp},
     db::{
         DbConn,
         models::{
-            Group, GroupUser, Invitation, Membership, MembershipStatus, MembershipType, OrgPolicy, Organization,
-            OrganizationApiKey, OrganizationId, User,
+            EventType, Group, GroupUser, Invitation, Membership, MembershipStatus, MembershipType, OrgPolicy,
+            Organization, OrganizationApiKey, OrganizationId, User,
         },
     },
     mail,
 };
 
+mod collections;
+mod members;
+mod models;
+mod policies;
+
 pub fn routes() -> Vec<Route> {
-    routes![ldap_import]
+    let mut routes = routes![ldap_import];
+    routes.append(&mut members::routes());
+    routes.append(&mut collections::routes());
+    routes.append(&mut policies::routes());
+    routes
+}
+
+/// The acting user recorded on the events of a Public API request, which is authorized by the organization's API key
+/// rather than by a user (Bitwarden records these with its `PublicApi` system user). Same shape as the admin page's.
+const ACTING_PUBLIC_API_USER: &str = "vaultwarden-pubapi-0000-000000000000";
+/// The device type recorded on those events: UnknownBrowser, as for the admin page's events.
+const PUBLIC_API_DEVICE_TYPE: i32 = 14;
+
+/// Record an organization event for a Public API request.
+async fn public_event(event_type: EventType, source_uuid: &str, org_id: &OrganizationId, ip: &ClientIp, conn: &DbConn) {
+    log_event(event_type, source_uuid, org_id, &ACTING_PUBLIC_API_USER.into(), PUBLIC_API_DEVICE_TYPE, &ip.ip, conn)
+        .await;
 }
 
 #[derive(Deserialize)]
