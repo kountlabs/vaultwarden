@@ -1,6 +1,6 @@
-# Kount build of Vaultwarden — 1.37.4+kount.1
+# Kount build of Vaultwarden — 1.37.4+kount.2
 
-This branch (`kount/1.37.4`) and its tag (`1.37.4+kount.1`) are the complete corresponding source of the modified
+This branch (`kount/1.37.4`) and its tag (`1.37.4+kount.2`; the earlier build's tag `1.37.4+kount.1` stays) are the complete corresponding source of the modified
 Vaultwarden that runs at vault.kount.com.au, offered under the GNU AGPL v3 (§13). It is exactly upstream
 `dani-garcia/vaultwarden` at tag `1.37.4` (commit `7c18896`) with Kount's patch set applied:
 
@@ -10,9 +10,10 @@ Vaultwarden that runs at vault.kount.com.au, offered under the GNU AGPL v3 (§13
 - the build changes that bundle Kount's web vault (`docker/Dockerfile.debian`, `.dockerignore`).
 
 The image also bundles a web vault built from Bitwarden's clients (GPL-3.0) at `v2026.7.0` (the commit
-`dani-garcia/bw_web_builds` `v2026.7.0` names) with Kount's two web-vault patches, which are committed beside the
-server source in [`kount/web/`](kount/web/): the editable collection External ID in the admin console, and the
-organisation vault's prefilled "New item" link.
+`dani-garcia/bw_web_builds` `v2026.7.0` names) with Kount's four web-vault patches, which are committed beside the
+server source in [`kount/web/`](kount/web/): the editable collection External ID in the admin console, the
+organisation vault's prefilled "New item" link, the "New collection…" entry in the add form's Collections list, and
+the admin console's "One collection per item" bulk split.
 
 > The vault at vault.kount.com.au runs a modified Vaultwarden. Its complete source code is available at
 > https://github.com/kountlabs/vaultwarden — the tag matching the version shown on the vault's admin

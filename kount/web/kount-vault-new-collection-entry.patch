@@ -1,0 +1,218 @@
+Kount — a "New collection…" entry in the Add item dialog's Collections list (plan claim-and-sso item 1, D10).
+
+The admin console's add form lists "New collection…" last in its Collections field. Picking it opens the usual collection
+dialog (A1's External ID included) with the name prefilled from the item; on Save the new collection is added to the
+form's list and selected beside what was already selected. The form only takes an optional `newCollection` from its config:
+only the admin console's config service gives one, and only for someone who can create collections, so every other client
+of the shared form is unchanged. The Saved result is the server's response, whose name is ciphertext (docs/spike-2026-11.md
+S1), so the provider re-reads the collection by id. Cut against the tree with A1 and P5 applied; applied in name order.
+
+diff --git a/apps/web/src/app/admin-console/organizations/collections/kount/new-collection-entry.ts b/apps/web/src/app/admin-console/organizations/collections/kount/new-collection-entry.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/web/src/app/admin-console/organizations/collections/kount/new-collection-entry.ts
+@@ -0,0 +1,63 @@
++import { inject } from "@angular/core";
++import { firstValueFrom, lastValueFrom } from "rxjs";
++
++import { CollectionAdminService } from "@bitwarden/admin-console/common";
++import { CollectionView } from "@bitwarden/common/admin-console/models/collections";
++import { Organization } from "@bitwarden/common/admin-console/models/domain/organization";
++import { AccountService } from "@bitwarden/common/auth/abstractions/account.service";
++import { getUserId } from "@bitwarden/common/auth/services/account.service";
++import { LogService } from "@bitwarden/common/platform/abstractions/log.service";
++import { OrganizationId } from "@bitwarden/common/types/guid";
++import { DialogService, ToastService } from "@bitwarden/components";
++
++import {
++  CollectionDialogAction,
++  openCollectionDialog,
++} from "../../shared/components/collection-dialog";
++
++/**
++ * Kount: what the admin console gives the cipher form as `newCollection`. Call it in an injection context; the function
++ * it returns opens the collection dialog and resolves with the collection saved, or undefined when none was.
++ */
++export function kountNewCollectionEntry() {
++  const dialogService = inject(DialogService);
++  const collectionAdminService = inject(CollectionAdminService);
++  const accountService = inject(AccountService);
++  const toastService = inject(ToastService);
++  const logService = inject(LogService);
++
++  return async (organization: Organization, itemName: string) => {
++    const dialog = openCollectionDialog(dialogService, {
++      data: {
++        organizationId: organization.id as OrganizationId,
++        limitNestedCollections: !organization.canEditAnyCollection,
++        isAdminConsoleActive: true,
++        initialName: itemName,
++      },
++    });
++    const result = await lastValueFrom(dialog.closed);
++    if (result?.action !== CollectionDialogAction.Saved || !result.collection?.id) {
++      return undefined;
++    }
++
++    // The result's name is ciphertext; the view read back by id carries the name the form shows.
++    let saved: CollectionView | undefined;
++    try {
++      const userId = await firstValueFrom(accountService.activeAccount$.pipe(getUserId));
++      const views = await firstValueFrom(
++        collectionAdminService.collectionAdminViews$(organization.id, userId),
++      );
++      saved = views.find((view) => view.id === result.collection.id);
++    } catch (e) {
++      logService.error(e);
++    }
++    if (saved == null) {
++      toastService.showToast({
++        variant: "error",
++        message:
++          "The collection was saved, but could not be selected here. Close this dialog and add the item again.",
++      });
++    }
++    return saved;
++  };
++}
+diff --git a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+--- a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
++++ b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+@@ -104,4 +104,6 @@ export interface CollectionDialogParams {
+   readonly?: boolean;
+   isAddAccessCollection?: boolean;
+   isAdminConsoleActive?: boolean;
++  /** Kount: a new collection's name, prefilled from the item by the "New collection…" entry. */
++  initialName?: string;
+ }
+@@ -179,2 +181,5 @@ export class CollectionDialogComponent implements OnInit, OnDestroy {
+   async ngOnInit() {
++    if (!this.editMode && this.params.initialName) {
++      this.formGroup.patchValue({ name: this.params.initialName });
++    }
+     // Opened from the individual vault
+diff --git a/apps/web/src/app/vault/org-vault/services/admin-console-cipher-form-config.service.ts b/apps/web/src/app/vault/org-vault/services/admin-console-cipher-form-config.service.ts
+--- a/apps/web/src/app/vault/org-vault/services/admin-console-cipher-form-config.service.ts
++++ b/apps/web/src/app/vault/org-vault/services/admin-console-cipher-form-config.service.ts
+@@ -24,3 +24,5 @@ import {
+ } from "@bitwarden/vault";
+
++import { kountNewCollectionEntry } from "../../../admin-console/organizations/collections/kount/new-collection-entry";
++
+ /** Admin Console implementation of the `CipherFormConfigService`. */
+@@ -35,2 +37,3 @@ export class AdminConsoleCipherFormConfigService implements CipherFormConfigServ
+   private accountService: AccountService = inject(AccountService);
++  private kountNewCollection = kountNewCollectionEntry();
+
+@@ -104,2 +107,5 @@ export class AdminConsoleCipherFormConfigService implements CipherFormConfigServ
+       isAdminConsole: true,
++      newCollection: organization.canCreateNewCollections
++        ? (itemName: string) => this.kountNewCollection(organization, itemName)
++        : undefined,
+     };
+diff --git a/libs/vault/src/cipher-form/abstractions/cipher-form-config.service.ts b/libs/vault/src/cipher-form/abstractions/cipher-form-config.service.ts
+--- a/libs/vault/src/cipher-form/abstractions/cipher-form-config.service.ts
++++ b/libs/vault/src/cipher-form/abstractions/cipher-form-config.service.ts
+@@ -111,3 +111,9 @@ type BaseCipherFormConfig = {
+   /** True when the config is built within the context of the Admin Console */
+   isAdminConsole?: true;
++
++  /**
++   * Kount: given only by the Admin Console. Adds "New collection…" to the add form's Collections list: it opens the
++   * collection dialog with this name and resolves with the collection saved, or undefined when none was.
++   */
++  newCollection?: (itemName: string) => Promise<CollectionView | undefined>;
+ };
+diff --git a/libs/vault/src/cipher-form/components/item-details/item-details-section.component.html b/libs/vault/src/cipher-form/components/item-details/item-details-section.component.html
+--- a/libs/vault/src/cipher-form/components/item-details/item-details-section.component.html
++++ b/libs/vault/src/cipher-form/components/item-details/item-details-section.component.html
+@@ -43,2 +43,3 @@
+           <bit-multi-select
++            #kountCollections
+             class="tw-w-full"
+diff --git a/libs/vault/src/cipher-form/components/item-details/item-details-section.component.ts b/libs/vault/src/cipher-form/components/item-details/item-details-section.component.ts
+--- a/libs/vault/src/cipher-form/components/item-details/item-details-section.component.ts
++++ b/libs/vault/src/cipher-form/components/item-details/item-details-section.component.ts
+@@ -3,3 +3,3 @@
+ import { CommonModule } from "@angular/common";
+-import { Component, computed, DestroyRef, input, Input, OnInit } from "@angular/core";
++import { Component, computed, DestroyRef, input, Input, OnInit, viewChild } from "@angular/core";
+ import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+@@ -40,3 +40,6 @@ import {
+ import { CipherFormContainer } from "../../cipher-form-container";
+
++/** Kount: the id of the "New collection…" entry in the Collections list; never a collection's. */
++const KOUNT_NEW_COLLECTION_OPTION = "kount-new-collection";
++
+ // FIXME(https://bitwarden.atlassian.net/browse/CL-764): Migrate to OnPush
+@@ -80,3 +83,8 @@ export class ItemDetailsSectionComponent implements OnInit {
+   protected collectionOptions: SelectItemView[] = [];
+
++  /** Kount: the Collections control, so the entry can close its list before opening a dialog. */
++  private readonly kountCollections = viewChild<{ select(): { close(): void } }>(
++    "kountCollections",
++  );
++
+   /**
+@@ -243,3 +251,14 @@ export class ItemDetailsSectionComponent implements OnInit {
+     this.setFormState();
+
++    // Kount: picking "New collection…" opens the collection dialog instead of selecting the entry.
++    this.itemDetailsForm.controls.collectionIds.valueChanges
++      .pipe(takeUntilDestroyed(this.destroyRef))
++      .subscribe((selected: SelectItemView[] | null) => {
++        if (selected?.some((option) => option.id === KOUNT_NEW_COLLECTION_OPTION)) {
++          void this.kountNewCollection(
++            selected.filter((option) => option.id !== KOUNT_NEW_COLLECTION_OPTION),
++          );
++        }
++      });
++
+     this.itemDetailsForm.controls.organizationId.valueChanges
+@@ -368,2 +387,18 @@ export class ItemDetailsSectionComponent implements OnInit {
+
++  /** Kount: takes the entry back out, opens the dialog, then selects what it saved beside what was selected. */
++  private async kountNewCollection(selected: SelectItemView[]) {
++    this.itemDetailsForm.controls.collectionIds.setValue(selected);
++    this.kountCollections()?.select().close();
++
++    const collection = await this.config.newCollection(this.itemDetailsForm.controls.name.value);
++    if (collection == null) {
++      return;
++    }
++    this.config.collections = [...this.config.collections, collection];
++    await this.updateCollectionOptions([
++      ...selected.map((option) => option.id as CollectionId),
++      collection.id,
++    ]);
++  }
++
+   private setCollectionControlState() {
+@@ -468,10 +503,25 @@ export class ItemDetailsSectionComponent implements OnInit {
+
++    // Kount: the admin console's add form lists "New collection…" last. It is never a collection, so it
++    // does not count towards the single-collection default below and never matches a starting selection.
++    const selectable = this.collectionOptions;
++    if (this.config.newCollection != null && this.config.mode === "add") {
++      this.collectionOptions = [
++        ...selectable,
++        {
++          id: KOUNT_NEW_COLLECTION_OPTION,
++          listName: "New collection…",
++          labelName: "New collection…",
++          icon: "bwi-plus",
++        },
++      ];
++    }
++
+     collectionsControl.reset();
+     collectionsControl.enable();
+     this.showCollectionsControl = true;
+
+     // If there is only one collection, select it by default.
+-    if (this.collectionOptions.length === 1) {
+-      collectionsControl.setValue(this.collectionOptions);
++    if (selectable.length === 1) {
++      collectionsControl.setValue(selectable);
+       return;
+     }
