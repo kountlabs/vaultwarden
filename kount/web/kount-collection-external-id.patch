@@ -1,0 +1,118 @@
+Kount A1 — the collection dialog's External ID is shown and editable in the admin console.
+
+At this web vault the field is read-only and shown only for a collection that already has an External ID, so an
+admin could not type the id Kount Protect gives an account (plan DA, A1; docs/spike-2026-11.md E14). The admin
+console's dialog openers (add and edit) pass `isAdminConsoleActive: true`; outside the admin console the field stays
+hidden. It follows the name field's editable state, is capped at 300 characters (Bitwarden's limit) and is trimmed on
+save, an empty value sent as none; the copy button shows once there is a value. The server already stores
+`externalId` on create and on update. Re-cut on web v2026.10.1 from the `kountlabs/vw_web_builds` branch
+`collection-external-id` (the dialog was rewritten upstream).
+
+diff --git a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
+--- a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
++++ b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.html
+@@ -71,26 +71,28 @@
+               }
+             </bit-select>
+           </bit-form-field>
+-          @if (externalId(); as externalIdValue) {
++          @if (showExternalId) {
+             <bit-form-field>
+               <bit-label>{{ "externalId" | i18n }}</bit-label>
+               <input
+                 id="collection-dialog_input_external-id"
+                 bitInput
+                 type="text"
+-                readonly
++                maxlength="300"
+                 formControlName="externalId"
+               />
+-              <button
+-                id="collection-dialog_button_copy-external-id"
+-                type="button"
+-                bitSuffix
+-                bitIconButton="bwi-clone"
+-                showToast
+-                [appCopyClick]="externalIdValue"
+-                [valueLabel]="'externalId' | i18n"
+-                [label]="'copyExternalId' | i18n"
+-              ></button>
++              @if (externalId(); as externalIdValue) {
++                <button
++                  id="collection-dialog_button_copy-external-id"
++                  type="button"
++                  bitSuffix
++                  bitIconButton="bwi-clone"
++                  showToast
++                  [appCopyClick]="externalIdValue"
++                  [valueLabel]="'externalId' | i18n"
++                  [label]="'copyExternalId' | i18n"
++                ></button>
++              }
+               <bit-hint>{{ "externalIdDesc" | i18n }}</bit-hint>
+             </bit-form-field>
+           }
+diff --git a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+--- a/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
++++ b/apps/web/src/app/admin-console/organizations/shared/components/collection-dialog/collection-dialog.component.ts
+@@ -128,7 +128,7 @@ export class CollectionDialogComponent implements OnInit {
+ 
+   protected readonly formGroup = this.formBuilder.group({
+     name: ["", [Validators.required, BitValidators.forbiddenCharacters(["/"])]],
+-    // set to readonly in the template
++    // shown and editable in the Admin Console only
+     externalId: { value: "", disabled: false },
+     parent: undefined as string | undefined,
+     access: [[] as AccessItemValue[]],
+@@ -140,11 +140,17 @@ export class CollectionDialogComponent implements OnInit {
+     { initialValue: this.formGroup.controls.externalId.value || undefined },
+   );
+ 
+-  /** The external ID, shown read-only and only in the Admin Console. */
++  /** The external ID, which the copy button copies. */
+   protected readonly externalId = computed(() =>
+     this.params.isAdminConsoleActive ? this.externalIdValue() : undefined,
+   );
+ 
++  /**
++   * The External ID field is shown in the Admin Console even while it is empty, so that an admin can set it: on
++   * Vaultwarden there is no Directory Connector or SCIM sync that would otherwise set it.
++   */
++  protected readonly showExternalId = !!this.params.isAdminConsoleActive;
++
+   private readonly activeUserId$ = this.accountService.activeAccount$.pipe(getUserId);
+ 
+   protected readonly organizations$: Observable<Organization[]> = this.activeUserId$.pipe(
+@@ -520,7 +526,7 @@ export class CollectionDialogComponent implements OnInit {
+     collectionView.id = this.params.collectionId as CollectionId;
+     collectionView.organizationId =
+       this.formGroup.controls.selectedOrg.value ?? ("" as OrganizationId);
+-    collectionView.externalId = this.formGroup.controls.externalId.value ?? undefined;
++    collectionView.externalId = this.formGroup.controls.externalId.value?.trim() || undefined;
+     const accessValue = this.formGroup.controls.access.value ?? [];
+     collectionView.groups = accessValue
+       .filter((v) => v.type === AccessItemType.Group)
+@@ -604,6 +610,7 @@ export class CollectionDialogComponent implements OnInit {
+       this.formGroup.controls.access.disable();
+       this.formGroup.controls.name.disable();
+       this.formGroup.controls.parent.disable();
++      this.formGroup.controls.externalId.disable();
+       return;
+     }
+ 
+@@ -612,6 +619,7 @@ export class CollectionDialogComponent implements OnInit {
+     if (!this.editMode) {
+       this.formGroup.controls.name.enable();
+       this.formGroup.controls.parent.enable();
++      this.formGroup.controls.externalId.enable();
+       return;
+     }
+ 
+@@ -622,6 +630,7 @@ export class CollectionDialogComponent implements OnInit {
+     const canEditName = collection.canEditName(this.organization()!);
+     this.formGroup.controls.name[canEditName ? "enable" : "disable"]();
+     this.formGroup.controls.parent[canEditName ? "enable" : "disable"]();
++    this.formGroup.controls.externalId[canEditName ? "enable" : "disable"]();
+   }
+ 
+   private close(action: CollectionDialogAction, collection?: CollectionResponse | CollectionView) {

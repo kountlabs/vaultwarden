@@ -1,0 +1,77 @@
+Kount P5 — a "New item" link opens the organisation vault's add dialog prefilled.
+
+`#/organizations/<org>/vault?collectionId=<id>&action=add&name=…&username=…&uri=…` opens the New item
+dialog for a Login, in that collection, with the name, the username and the URI filled. Only those
+three values are read (never a password); a `uri` that is not http(s) is dropped; each value is
+trimmed and capped at 1000 characters. Applies to vaultwarden/vw_web_builds at the commit in
+upstream.lock (build/apply.sh checks it; build/web-vault.Dockerfile applies it).
+
+diff --git a/apps/web/src/app/admin-console/organizations/collections/services/vault-cipher-actions.service.ts b/apps/web/src/app/admin-console/organizations/collections/services/vault-cipher-actions.service.ts
+--- a/apps/web/src/app/admin-console/organizations/collections/services/vault-cipher-actions.service.ts
++++ b/apps/web/src/app/admin-console/organizations/collections/services/vault-cipher-actions.service.ts
+@@ -140,8 +140,14 @@ export class VaultCipherActionsService {
+     }
+   }
+ 
+-  /** Opens the Add/Edit Dialog */
+-  async addCipher(cipherType?: CipherType): Promise<void> {
++  /**
++   * Opens the Add/Edit Dialog
++   * @param prefill - Kount: the login's name, username and URI from a "New item" link (never a password)
++   */
++  async addCipher(
++    cipherType?: CipherType,
++    prefill?: { name?: string; username?: string; loginUri?: string },
++  ): Promise<void> {
+     const activeFilter = await firstValueFrom(this.activeFilter$);
+     const type = cipherType ?? activeFilter.cipherType;
+ 
+@@ -158,6 +164,9 @@ export class VaultCipherActionsService {
+     cipherFormConfig.initialValues = {
+       organizationId: organization.id,
+       collectionIds: collectionId ? [collectionId] : [],
++      name: prefill?.name,
++      username: prefill?.username,
++      loginUri: prefill?.loginUri,
+     };
+ 
+     await this.openVaultItemDialog("form", cipherFormConfig);
+diff --git a/apps/web/src/app/admin-console/organizations/collections/vault.component.ts b/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
+--- a/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
++++ b/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
+@@ -512,6 +512,35 @@ export class VaultComponent implements OnInit, OnDestroy {
+       )
+       .subscribe();
+ 
++    // Kount: a "New item" link (`action=add`, optional `name`, `username`, `uri`) opens the add
++    // dialog prefilled, in the collection the link names. Only those three values are read (never a
++    // password), and a `uri` that is not http(s) is dropped. Handled once per page load.
++    firstSetup$
++      .pipe(
++        switchMap(() => this.route.queryParams),
++        filter((qParams) => qParams.action === "add" && !getCipherIdFromParams(qParams)),
++        take(1),
++        switchMap(async (qParams) => {
++          const text = (value: unknown): string | undefined =>
++            typeof value === "string" && value.trim() !== ""
++              ? value.trim().slice(0, 1000)
++              : undefined;
++          const uri = text(qParams.uri);
++          await this.router.navigate([], {
++            queryParams: { action: null, name: null, username: null, uri: null },
++            queryParamsHandling: "merge",
++            replaceUrl: true,
++          });
++          await this.cipherActions.addCipher(CipherType.Login, {
++            name: text(qParams.name),
++            username: text(qParams.username),
++            loginUri: uri && /^https?:\/\//i.test(uri) ? uri : undefined,
++          });
++        }),
++        takeUntil(this.destroy$),
++      )
++      .subscribe();
++
+     // Handle deep linking to a cipher event
+     firstSetup$
+       .pipe(

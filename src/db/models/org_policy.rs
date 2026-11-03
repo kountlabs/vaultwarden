@@ -43,8 +43,8 @@ pub enum OrgPolicyType {
     ResetPassword = 8,
     // MaximumVaultTimeout = 9, // Not supported (Not AGPLv3 Licensed)
     // DisablePersonalVaultExport = 10, // Not supported (Not AGPLv3 Licensed)
-    // ActivateAutofill = 11,
-    // AutomaticAppLogIn = 12,
+    ActivateAutofill = 11,   // Kount (apps/vaultwarden-kount): served; the clients enforce it
+    AutomaticAppLogIn = 12,  // Kount: served; the clients enforce it
     // FreeFamiliesSponsorshipPolicy = 13,
     RemoveUnlockWithPin = 14,
     RestrictedItemTypes = 15,

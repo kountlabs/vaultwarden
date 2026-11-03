@@ -22,8 +22,22 @@ use crate::{
 };
 
 pub fn routes() -> Vec<Route> {
-    routes![ldap_import]
+    let mut routes = routes![ldap_import];
+    // Kount: Bitwarden's public members, collections and policies API (apps/vaultwarden-kount).
+    routes.append(&mut public_members::routes());
+    routes.append(&mut public_collections::routes());
+    routes.append(&mut public_policies::routes());
+    routes
 }
+
+#[path = "public_collections.rs"]
+mod public_collections;
+#[path = "public_members.rs"]
+mod public_members;
+#[path = "public_models.rs"]
+mod public_models;
+#[path = "public_policies.rs"]
+mod public_policies;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

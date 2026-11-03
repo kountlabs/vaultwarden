@@ -27,7 +27,10 @@
 #     $ docker image inspect --format "{{.RepoTags}}" docker.io/vaultwarden/web-vault@sha256:7baaa7d5349742548b6c44e557c1512157b22010cdf314ccc399ffdcacb5eb52
 #     [docker.io/vaultwarden/web-vault:v2026.10.1]
 #
-FROM --platform=linux/amd64 docker.io/vaultwarden/web-vault@sha256:7baaa7d5349742548b6c44e557c1512157b22010cdf314ccc399ffdcacb5eb52 AS vault
+# Kount (apps/vaultwarden-kount): the web vault is Kount's own build (build/build-web.sh), extracted
+# into ./web-vault of the build context, in place of the published image above.
+FROM scratch AS vault
+COPY web-vault /web-vault
 
 ########################## Cross Compile Docker Helper Scripts ##########################
 ## We use the linux/amd64 no matter which Build Platform, since these are all bash scripts

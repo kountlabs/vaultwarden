@@ -1,0 +1,600 @@
+Kount — "One collection per item" in the organisation vault's batch bar (plan claim-and-sso item 2 (a), D1, D10).
+
+At web v2026.10.1 the organisation vault's bulk actions are the shared batch bar (`libs/vault` `VaultBatchBarService`), so the
+entry is a batch-bar action shown only when the admin console's vault gives the bar its optional `splitCollections` callback
+(every other host of the bar is unchanged). The assignment is the same `PUT /ciphers/<id>/collections-admin` as before, sent
+through `ApiService.send` (upstream moved its own call into the SDK, whose errors carry no HTTP status). For each selected
+login, in order: build the stamp `kp:new:<host>|<name>|<username>` (D1; conformance/stamp-vectors.json is the
+contract), create a collection with the chosen name and the stamp as its External ID, then assign the login to it alone, which removes
+it from every other collection. Kount Protect reads the stamps and claims them. Each write has three outcomes, and the
+classification is total: done (a 2xx whose body yields what the next step needs), refused (a 4xx) and unknown (everything else,
+since the server may have committed: docs/spike-2026-11.md S8). The first stop ends the run: earlier logins stay split, later ones
+untouched, and only a refused assignment deletes anything (its collection, just made and empty). Cut against the tree with A1 and
+P5 applied; applied in name order. Strings are English in the new files; an upstream PR would move them to messages.json.
+
+diff --git a/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.html b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.html
+new file mode 100644
+--- /dev/null
++++ b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.html
+@@ -0,0 +1,86 @@
++<form [formGroup]="formGroup" [bitSubmit]="submit" bit-dialog dialogSize="large">
++  <span bitDialogTitle>One collection per item</span>
++
++  <div bitDialogContent>
++    <p>
++      Each of the <b>{{ logins.length }}</b> selected logins gets its own collection and is moved into it. Kount Protect
++      reads the collections and lets you claim each as an account on a tile.
++      @if (skipped > 0) {
++        {{ skipped }} selected {{ skipped === 1 ? "item is" : "items are" }} not a login and will be left alone.
++      }
++    </p>
++
++    <bit-radio-group formControlName="pattern" [block]="true">
++      <bit-label>Name each new collection</bit-label>
++      <bit-radio-button id="kountSplitItem" value="item">
++        <bit-label>After the item</bit-label>
++        <bit-hint>“{{ first.name }}” → collection “{{ exampleName("item") }}”</bit-hint>
++      </bit-radio-button>
++      <bit-radio-button id="kountSplitItemUsername" value="item-username">
++        <bit-label>Item — username</bit-label>
++        <bit-hint>“{{ exampleName("item-username") }}”</bit-hint>
++      </bit-radio-button>
++      <bit-radio-button id="kountSplitWebsiteUsername" value="website-username">
++        <bit-label>Website — username</bit-label>
++        <bit-hint>“{{ exampleName("website-username") }}”</bit-hint>
++      </bit-radio-button>
++      <bit-radio-button id="kountSplitPrefixItem" value="prefix-item">
++        <bit-label>Prefix + item</bit-label>
++        <bit-hint>“{{ exampleName("prefix-item") }}”</bit-hint>
++      </bit-radio-button>
++    </bit-radio-group>
++
++    @if (formGroup.controls.pattern.value === "prefix-item") {
++      <bit-form-field>
++        <bit-label>Prefix</bit-label>
++        <input bitInput formControlName="prefix" />
++      </bit-form-field>
++    }
++
++    <div class="tw-mb-4 tw-grid tw-grid-cols-[1fr_2fr] tw-gap-x-4 tw-gap-y-1 tw-text-sm" data-testid="kount-split-preview">
++      <span class="tw-text-muted">Collection</span>
++      <span class="tw-text-muted">External ID (what Kount Protect reads)</span>
++      @for (row of preview; track $index) {
++        <span class="tw-break-words">{{ row.collection }}</span>
++        <span class="tw-break-all tw-font-mono">{{ row.stamp ?? "Too long: it would stop the split here" }}</span>
++      }
++      @if (logins.length > preview.length) {
++        <span class="tw-text-muted">… {{ logins.length - preview.length }} more</span>
++        <span class="tw-text-muted">host | item name | username — the same whatever the collection is named</span>
++      }
++    </div>
++
++    <bit-form-control>
++      <input type="checkbox" bitCheckbox formControlName="includeUsername" />
++      <bit-label>Include the username in the External ID</bit-label>
++      <bit-hint>
++        Kount Protect prefills the account's username from it. Untick to write the host and name only.
++      </bit-hint>
++    </bit-form-control>
++
++    <bit-callout type="warning">
++      The website host, the item name and (ticked above) the username are written into each collection's
++      <b>External ID</b> in plain text so Kount Protect can show and prefill them (item names are otherwise encrypted).
++      Kount Protect replaces the External ID with its own opaque id when you claim the login. An item with no website has
++      no host in it. The naming choice changes the collection's name only.
++    </bit-callout>
++
++    <p class="tw-text-sm tw-text-muted">
++      Access to the new collections: nobody except Owners and Admins, until Kount Protect grants it. A login already in a
++      collection is moved out of it, so anyone who reached it only through that collection loses it until then.
++    </p>
++
++    @if (running()) {
++      <p class="tw-mb-0" role="status">Done {{ done() }} of {{ logins.length }}…</p>
++    }
++  </div>
++
++  <ng-container bitDialogFooter>
++    <button type="submit" bitButton bitFormButton buttonType="primary">
++      Create {{ logins.length }} {{ logins.length === 1 ? "collection" : "collections" }}
++    </button>
++    <button type="button" bitButton bitFormButton buttonType="secondary" bitDialogClose>
++      {{ "cancel" | i18n }}
++    </button>
++  </ng-container>
++</form>
+diff --git a/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.ts b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections-dialog.component.ts
+@@ -0,0 +1,146 @@
++import { Component, inject, signal } from "@angular/core";
++import { FormBuilder } from "@angular/forms";
++import { lastValueFrom } from "rxjs";
++
++import { Organization } from "@bitwarden/common/admin-console/models/domain/organization";
++import { OrganizationId } from "@bitwarden/common/types/guid";
++import { CipherType } from "@bitwarden/common/vault/enums";
++import { CipherRepromptType } from "@bitwarden/common/vault/enums/cipher-reprompt-type";
++import { CipherView } from "@bitwarden/common/vault/models/view/cipher.view";
++import {
++  DIALOG_DATA,
++  DialogRef,
++  DialogService,
++  ToastService,
++} from "@bitwarden/components";
++import { PasswordRepromptService } from "@bitwarden/vault";
++
++import { SharedModule } from "../../../../shared";
++
++import { SplitCollectionsService, SplitSummary } from "./split-collections.service";
++import { collectionName, encodeStamp, loginFacts, SplitPattern } from "./split-stamp";
++
++const PREVIEW_ROWS = 3;
++// A stop's toast is the only record of what to check, and it can be long: it stays until read.
++const STOP_TOAST_MS = 60000;
++
++interface SplitCollectionsDialogParams {
++  organizationId: OrganizationId;
++  logins: CipherView[];
++  skipped: number;
++}
++
++/** Kount: the confirm dialog of "One collection per item" (plan claim-and-sso item 2 (a)). */
++@Component({
++  templateUrl: "split-collections-dialog.component.html",
++  imports: [SharedModule],
++  providers: [SplitCollectionsService],
++})
++export class SplitCollectionsDialogComponent {
++  private readonly params = inject<SplitCollectionsDialogParams>(DIALOG_DATA);
++  private readonly dialogRef = inject<DialogRef<boolean>>(DialogRef);
++  private readonly splitCollections = inject(SplitCollectionsService);
++  private readonly passwordRepromptService = inject(PasswordRepromptService);
++  private readonly toastService = inject(ToastService);
++
++  protected readonly logins = this.params.logins;
++  protected readonly skipped = this.params.skipped;
++  protected readonly first = this.logins[0];
++  protected readonly running = signal(false);
++  protected readonly done = signal(0);
++
++  protected readonly formGroup = inject(FormBuilder).group({
++    pattern: ["item" as SplitPattern],
++    prefix: [""],
++    includeUsername: [true],
++  });
++
++  protected exampleName(pattern: SplitPattern): string {
++    return collectionName(loginFacts(this.first), pattern, this.prefix);
++  }
++
++  protected get preview(): { collection: string; stamp: string | null }[] {
++    return this.logins.slice(0, PREVIEW_ROWS).map((login) => ({
++      collection: collectionName(loginFacts(login), this.pattern, this.prefix),
++      stamp: encodeStamp(loginFacts(login, this.includeUsername)),
++    }));
++  }
++
++  private get pattern(): SplitPattern {
++    return this.formGroup.controls.pattern.value ?? "item";
++  }
++
++  private get prefix(): string {
++    return this.formGroup.controls.prefix.value ?? "";
++  }
++
++  private get includeUsername(): boolean {
++    return this.formGroup.controls.includeUsername.value ?? true;
++  }
++
++  protected submit = async () => {
++    const protectedItem = this.logins.some((login) => login.reprompt !== CipherRepromptType.None);
++    if (protectedItem && !(await this.passwordRepromptService.showPasswordPrompt())) {
++      return;
++    }
++    this.running.set(true);
++    const summary = await this.splitCollections.run(
++      this.params.organizationId,
++      this.logins,
++      { pattern: this.pattern, prefix: this.prefix, includeUsername: this.includeUsername },
++      (done) => this.done.set(done),
++    );
++    this.showSummary(summary);
++    await this.dialogRef.close(true);
++  };
++
++  private showSummary({ done, total, stop }: SplitSummary): void {
++    if (stop == null) {
++      this.toastService.showToast({
++        variant: "success",
++        message: `${done} of ${total} ${total === 1 ? "login" : "logins"} split, each into its own collection.`,
++      });
++      return;
++    }
++    this.toastService.showToast({
++      variant: "error",
++      timeout: STOP_TOAST_MS,
++      message: `${done} of ${total} ${total === 1 ? "login" : "logins"} split, then it stopped at “${stop.login}”. ${stop.reason} The logins after it were not touched.`,
++    });
++  }
++}
++
++/**
++ * Kount: opens the dialog for what the batch bar selected. Resolves true when a run happened, so the vault reloads.
++ */
++export async function openSplitCollections(
++  dialogService: DialogService,
++  toastService: ToastService,
++  organization: Organization,
++  items: CipherView[],
++): Promise<boolean> {
++  if (!organization.canCreateNewCollections || !organization.canEditAllCiphers) {
++    toastService.showToast({
++      variant: "error",
++      message: "You lack the necessary permissions to perform this action.",
++    });
++    return false;
++  }
++  const logins = items.filter((item) => item.type === CipherType.Login && !item.isDeleted);
++  if (logins.length === 0) {
++    toastService.showToast({ variant: "error", message: "Select at least one login." });
++    return false;
++  }
++  const dialog = dialogService.open<boolean, SplitCollectionsDialogParams>(
++    SplitCollectionsDialogComponent,
++    {
++      data: {
++        organizationId: organization.id as OrganizationId,
++        logins,
++        skipped: items.length - logins.length,
++      },
++      disableClose: true,
++    },
++  );
++  return (await lastValueFrom(dialog.closed)) === true;
++}
+diff --git a/apps/web/src/app/admin-console/organizations/collections/kount/split-collections.service.ts b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections.service.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/web/src/app/admin-console/organizations/collections/kount/split-collections.service.ts
+@@ -0,0 +1,155 @@
++import { inject, Injectable } from "@angular/core";
++import { firstValueFrom } from "rxjs";
++
++import { CollectionAdminService } from "@bitwarden/admin-console/common";
++import { ApiService } from "@bitwarden/common/abstractions/api.service";
++import { CollectionAdminView } from "@bitwarden/common/admin-console/models/collections";
++import { AccountService } from "@bitwarden/common/auth/abstractions/account.service";
++import { getUserId } from "@bitwarden/common/auth/services/account.service";
++import { ErrorResponse } from "@bitwarden/common/models/response/error.response";
++import { Utils } from "@bitwarden/common/platform/misc/utils";
++import { CollectionId, OrganizationId, UserId } from "@bitwarden/common/types/guid";
++import { CipherView } from "@bitwarden/common/vault/models/view/cipher.view";
++
++import { collectionName, encodeStamp, loginFacts, SplitPattern } from "./split-stamp";
++
++export interface SplitOptions {
++  pattern: SplitPattern;
++  prefix: string;
++  includeUsername: boolean;
++}
++
++export interface SplitSummary {
++  done: number;
++  total: number;
++  /** The login the run stopped at, and what to do about it. */
++  stop?: { login: string; reason: string };
++}
++
++/** One write's outcome. `read` decides "done": a 2xx with a body the next step cannot use is unknown. */
++type Outcome<T> = { kind: "done"; value: T } | { kind: "refused" } | { kind: "unknown" };
++
++async function attempt<T>(
++  write: () => Promise<unknown>,
++  read: (answer: any) => T | undefined,
++): Promise<Outcome<T>> {
++  let answer: unknown;
++  try {
++    answer = await write();
++  } catch (error) {
++    // Only a 4xx says the write did not apply. A 5xx, a network error or an unreadable body may follow a commit.
++    const refused =
++      error instanceof ErrorResponse && error.statusCode >= 400 && error.statusCode < 500;
++    return { kind: refused ? "refused" : "unknown" };
++  }
++  const value = read(answer);
++  return value === undefined ? { kind: "unknown" } : { kind: "done", value };
++}
++
++/** Kount: the writes of "One collection per item", in the admin console's own services (spike S3, S4, S7). */
++@Injectable()
++export class SplitCollectionsService {
++  private readonly collectionAdminService = inject(CollectionAdminService);
++  private readonly apiService = inject(ApiService);
++  private readonly accountService = inject(AccountService);
++
++  /** Splits in order and stops at the first login that cannot be split; never throws for a write's failure. */
++  async run(
++    organizationId: OrganizationId,
++    logins: CipherView[],
++    options: SplitOptions,
++    onDone: (done: number) => void,
++  ): Promise<SplitSummary> {
++    const userId = await firstValueFrom(this.accountService.activeAccount$.pipe(getUserId));
++    let done = 0;
++    for (const login of logins) {
++      const reason = await this.splitOne(organizationId, login, options, userId);
++      if (reason !== undefined) {
++        return { done, total: logins.length, stop: { login: login.name, reason } };
++      }
++      done += 1;
++      onDone(done);
++    }
++    return { done, total: logins.length };
++  }
++
++  /** Resolves undefined when the login is split, or the sentence that says why it is not. */
++  private async splitOne(
++    organizationId: OrganizationId,
++    login: CipherView,
++    options: SplitOptions,
++    userId: UserId,
++  ): Promise<string | undefined> {
++    const stamp = encodeStamp(loginFacts(login, options.includeUsername));
++    if (stamp === null) {
++      return "Its website and username are too long for an External ID, so nothing was written for it. Split it alone with “Include the username in the External ID” unticked.";
++    }
++    const name = collectionName(loginFacts(login), options.pattern, options.prefix);
++
++    const created = await this.create(organizationId, name, stamp, userId);
++    if (created.kind === "refused") {
++      return "The vault refused its new collection.";
++    }
++    if (created.kind === "unknown") {
++      return `The vault's answer to creating its collection “${name}” could not be read, so that collection may exist. Look for it before running this again: a second run makes a second one, and Kount Protect shows the two as a duplicate until one is deleted.`;
++    }
++
++    const assigned = await this.assign(login.id, created.value);
++    if (assigned.kind === "done") {
++      return undefined;
++    }
++    if (assigned.kind === "unknown") {
++      return `The vault's answer to moving it into its new collection “${name}” could not be read. That collection was kept: check the login's collections.`;
++    }
++    return (await this.remove(organizationId, created.value))
++      ? "The vault refused to move it, so its new collection was deleted."
++      : `The vault refused to move it, and its new collection “${name}” could not be deleted: it is empty, so delete it by hand.`;
++  }
++
++  private create(
++    organizationId: OrganizationId,
++    name: string,
++    stamp: string,
++    userId: UserId,
++  ): Promise<Outcome<CollectionId>> {
++    const view = new CollectionAdminView({
++      id: "" as CollectionId,
++      organizationId,
++      name,
++    });
++    view.externalId = stamp;
++    return attempt(
++      () => this.collectionAdminService.create(view, userId),
++      (response) => (Utils.isGuid(response?.id) ? (response.id as CollectionId) : undefined),
++    );
++  }
++
++  /** The login ends up in this collection alone: the write replaces its collections. */
++  private assign(cipherId: string, collectionId: CollectionId): Promise<Outcome<true>> {
++    return attempt(
++      () =>
++        this.apiService.send(
++          "PUT",
++          "/ciphers/" + cipherId + "/collections-admin",
++          { collectionIds: [collectionId] },
++          true,
++          true,
++        ),
++      (response) =>
++        Array.isArray(response?.collectionIds) &&
++        response.collectionIds.length === 1 &&
++        response.collectionIds[0] === collectionId
++          ? true
++          : undefined,
++    );
++  }
++
++  private async remove(organizationId: OrganizationId, collectionId: CollectionId): Promise<boolean> {
++    try {
++      await this.collectionAdminService.delete(organizationId, collectionId);
++      return true;
++    } catch {
++      return false;
++    }
++  }
++}
+diff --git a/apps/web/src/app/admin-console/organizations/collections/kount/split-stamp.ts b/apps/web/src/app/admin-console/organizations/collections/kount/split-stamp.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/web/src/app/admin-console/organizations/collections/kount/split-stamp.ts
+@@ -0,0 +1,85 @@
++import { CipherView } from "@bitwarden/common/vault/models/view/cipher.view";
++
++/**
++ * Kount: the stamp a split collection carries as its External ID, `kp:new:<host>|<name>|<username>` (plan claim-and-sso D1;
++ * apps/vaultwarden-kount/conformance/stamp-vectors.json `encode` is the contract the browser proofs compare with).
++ */
++const STAMP_BUDGET = 300;
++
++export type LoginFacts = { host: string; name: string; username: string };
++
++export type SplitPattern = "item" | "item-username" | "website-username" | "prefix-item";
++
++const encodeField = (value: string) => value.replace(/%/g, "%25").replace(/\|/g, "%7C");
++
++/**
++ * The stamp, or null when it cannot be written: the host and username alone are over the budget. (Nothing at all to
++ * write is null too, which a saved login cannot reach: its name is required.) Only the name is ever cut, walking whole
++ * code points of the raw name forward, so neither a surrogate pair nor an escape is split and a long name costs its length.
++ */
++export function encodeStamp(login: LoginFacts): string | null {
++  const host = encodeField(login.host);
++  const username = encodeField(login.username);
++  if (`kp:new:${host}||${username}`.length > STAMP_BUDGET) {
++    return null;
++  }
++  // What the name may take: the rest of the budget beside the host and, when there is one, the username.
++  const room = STAMP_BUDGET - `kp:new:${host}|${username && `|${username}`}`.length;
++  let name = "";
++  for (const codePoint of login.name) {
++    const encoded = encodeField(codePoint);
++    if (name.length + encoded.length > room) {
++      break;
++    }
++    name += encoded;
++  }
++  const fields = [host, name, username];
++  while (fields.length > 1 && fields[fields.length - 1] === "") {
++    fields.pop();
++  }
++  const stamp = `kp:new:${fields.join("|")}`;
++  return stamp === "kp:new:" ? null : stamp;
++}
++
++/** The lower-cased hostname of a login's first URI; empty when it has none, or it is not a web address. */
++function hostOf(uri: string | null | undefined): string {
++  const text = uri?.trim();
++  if (!text) {
++    return "";
++  }
++  try {
++    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
++    return url.protocol === "https:" || url.protocol === "http:" ? url.hostname.toLowerCase() : "";
++  } catch {
++    return "";
++  }
++}
++
++export function loginFacts(login: CipherView, includeUsername = true): LoginFacts {
++  return {
++    host: hostOf(login.login?.uri),
++    name: login.name ?? "",
++    username: includeUsername ? (login.login?.username ?? "") : "",
++  };
++}
++
++/** The collection's name. A "/" would nest it under a parent that does not exist, so it reads "-" here. */
++export function collectionName(login: LoginFacts, pattern: SplitPattern, prefix: string): string {
++  const both = (first: string, second: string) =>
++    first && second ? `${first} — ${second}` : first || second;
++  let name: string;
++  switch (pattern) {
++    case "item-username":
++      name = both(login.name, login.username);
++      break;
++    case "website-username":
++      name = both(login.host, login.username) || login.name;
++      break;
++    case "prefix-item":
++      name = `${prefix}${login.name}`;
++      break;
++    default:
++      name = login.name;
++  }
++  return name.replace(/\//g, "-");
++}
+diff --git a/apps/web/src/app/admin-console/organizations/collections/vault.component.ts b/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
+--- a/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
++++ b/apps/web/src/app/admin-console/organizations/collections/vault.component.ts
+@@ -103,6 +103,7 @@ import { CollectionDialogTabType } from "../shared/components/collection-dialog"
+ 
+ import { BulkEditCollectionAccessWebDialogAdapter } from "./bulk-collections-dialog/bulk-edit-collection-access-web-dialog.adapter";
+ import { CollectionAccessRestrictedComponent } from "./collection-access-restricted.component";
++import { openSplitCollections } from "./kount/split-collections-dialog.component";
+ import { ACRoutedVaultFilterModel, toACFilter } from "./models/ac-routed-vault-filter.model";
+ import { DefaultVaultCollectionService } from "./services/default-vault-collection.service";
+ import { VaultCipherActionsService } from "./services/vault-cipher-actions.service";
+@@ -426,6 +427,14 @@ export class VaultComponent implements OnInit, OnDestroy {
+           allCollections,
+           hasCiphers: ciphers.length > 0,
+           inTrash: filter.type === "trash",
++          // Kount: "One collection per item" in the bar (apps/vaultwarden-kount, overlay/web P7).
++          splitCollections: (ciphers) =>
++            openSplitCollections(
++              this.dialogService,
++              this.toastService,
++              organization,
++              ciphers as CipherView[],
++            ),
+         });
+       });
+ 
+diff --git a/libs/vault/src/components/vault-batch-bar/vault-batch-action.component.ts b/libs/vault/src/components/vault-batch-bar/vault-batch-action.component.ts
+--- a/libs/vault/src/components/vault-batch-bar/vault-batch-action.component.ts
++++ b/libs/vault/src/components/vault-batch-bar/vault-batch-action.component.ts
+@@ -94,6 +94,13 @@ export class VaultBatchActionComponent implements OnDestroy {
+           : this.i18nService.t("assignToCollections"),
+       });
+     }
++    if (this.service.canSplitCollections()) {
++      actions.push({
++        action: this.service.splitCollections.bind(this.service),
++        icon: "bwi-collection-shared",
++        label: "One collection per item", // Kount: English, as in its dialog
++      });
++    }
+     if (this.service.canEditCollectionAccess()) {
+       actions.push({
+         action: this.service.bulkEditCollectionAccess.bind(this.service),
+diff --git a/libs/vault/src/services/vault-batch-bar.service.ts b/libs/vault/src/services/vault-batch-bar.service.ts
+--- a/libs/vault/src/services/vault-batch-bar.service.ts
++++ b/libs/vault/src/services/vault-batch-bar.service.ts
+@@ -87,6 +87,11 @@ export interface VaultBatchBarConfig {
+    * scopes by route segment must set it, or Assign to collections can't preselect or remove it.
+    */
+   activeCollectionId?: CollectionId;
++  /**
++   * Kount: given only by the Admin Console. Adds "One collection per item" to the bar: it receives the selected
++   * ciphers and resolves true when a run happened, so the vault reloads.
++   */
++  splitCollections?: (ciphers: CipherViewLike[]) => Promise<boolean>;
+ }
+ 
+ /**
+@@ -425,6 +430,18 @@ export class VaultBatchBarService<C extends CipherViewLike> {
+     return selected.some((i) => i.collection !== undefined);
+   });
+ 
++  /**
++   * Kount: true when "One collection per item" is offered — the Admin Console gave it, the selection may be
++   * assigned to collections, and the page is not the trash.
++   */
++  readonly canSplitCollections = computed(
++    () =>
++      this.config().splitCollections != null &&
++      !this.inTrash() &&
++      this.selectedCiphers().length > 0 &&
++      this.canAssignToCollections(),
++  );
++
+   constructor() {
+     // Without the route filter, the host owns scope changes and clears the selection itself.
+     this.routedVaultFilterService?.filter$
+@@ -449,6 +466,16 @@ export class VaultBatchBarService<C extends CipherViewLike> {
+     this.config.set(config);
+   }
+ 
++  /** Kount: "One collection per item" on the selected ciphers; clears the selection and reloads after a run. */
++  async splitCollections(): Promise<void> {
++    const split = this.config().splitCollections;
++    if (split == null || !(await split(this.selectedCiphers()))) {
++      return;
++    }
++    this.clearSelection();
++    this._completed$.next();
++  }
++
+   /** Archive the selected ciphers after confirmation. No-op if reprompt is cancelled. */
+   async bulkArchive(): Promise<void> {
+     const ciphers = this.selectedCiphers();
